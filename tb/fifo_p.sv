@@ -595,7 +595,7 @@ package fifo_p;
     solicitud_sb instr_sb;
 
     function new(virtual fifo_if #(WIDTH) vif);
-        
+
         this.vif = vif;
 
         num_transacciones = 10;
@@ -639,7 +639,7 @@ package fifo_p;
         amb.tst_agnt_mbx.put(instr_agent);
         $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
         
-      #200;
+        #200
 
         instr_sb = reporte;
         amb.tst_sb_mbx.put(instr_sb);
