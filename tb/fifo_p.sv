@@ -82,6 +82,10 @@ package fifo_p;
     typedef mailbox #(solicitud_sb) comando_test_sb_mbx;
     typedef mailbox #(instrucciones_agente) comando_test_agent_mbx;
 
+    typedef mailbox #(trans_fifo) agt_sb_mbx_t;
+    typedef mailbox #(trans_fifo) mon_chkr_mbx_t;
+    typedef mailbox #(trans_fifo) sb_chkr_mbx_t;
+
     class driver #(parameter int WIDTH = 8);
 
         virtual fifo_if #(WIDTH) vif;
@@ -154,298 +158,284 @@ package fifo_p;
     class monitor #(parameter int WIDTH = 8);
 
         virtual fifo_if #(WIDTH) vif;
-        trans_sb_mbx mon_mbx;
+        mon_chkr_mbx_t mon_chkr_mbx;
 
-        function new(virtual fifo_if #(WIDTH) vif, trans_sb_mbx mon_mbx);
+        function new(virtual fifo_if #(WIDTH) vif, mon_chkr_mbx_t mon_chkr_mbx);
             this.vif = vif;
-            this.mon_mbx = mon_mbx;
+            this.mon_chkr_mbx = mon_chkr_mbx;
         endfunction
 
         task run();
-            trans_sb #(WIDTH) tr_sb;
+            trans_fifo #(WIDTH) tr_mon;
 
             forever begin
                 @(posedge vif.clk);
 
-                tr_sb = new();
-                tr_sb.clean();
+                if (vif.rst || vif.push || vif.pop) begin
 
-                if (vif.rst) begin
-                    tr_sb.reset = 1'b1;
-                    mon_mbx.put(tr_sb);
-                end
-                else if (vif.push && !vif.pop) begin
-                    tr_sb.dato_enviado = vif.din;
-                    tr_sb.tiempo_push  = $time;
-                    mon_mbx.put(tr_sb);
-                end
-                else if (vif.pop && !vif.push) begin
-                    tr_sb.dato_enviado = vif.dout;
-                    tr_sb.tiempo_pop   = $time;
-                    mon_mbx.put(tr_sb);
-                end
-                else if (vif.push && vif.pop) begin
-                    tr_sb.dato_enviado = vif.din;
-                    tr_sb.tiempo_push  = $time;
-                    tr_sb.tiempo_pop   = $time;
-                    mon_mbx.put(tr_sb);
+                    tr_mon = new();
+                    tr_mon.clean();
+                    tr_mon.tiempo = $time;
+
+                    if (vif.rst) begin
+                        tr_mon.tipo = reset;
+                    end
+                    else if (vif.push && vif.pop) begin
+                        tr_mon.tipo = lectura_escritura;
+                        tr_mon.dato = vif.din;
+                    end
+                    else if (vif.push) begin
+                        tr_mon.tipo = escritura;
+                        tr_mon.dato = vif.din;
+                    end
+                    else if (vif.pop) begin
+                        tr_mon.tipo = lectura;
+                        tr_mon.dato = vif.dout;
+                    end
+                
+                    mon_chkr_mbx.put(tr_mon);
+                    tr_mon.print("Monitor envia");
                 end
             end
         endtask
 
     endclass
 
-        class checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+    class checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
-        trans_fifo #(WIDTH) transaccion;
-        trans_fifo #(WIDTH) auxiliar;
-        trans_sb   #(WIDTH) to_sb;
+        trans_fifo #(WIDTH) trans_obs;
+        trans_fifo #(WIDTH) trans_exp;
 
-        trans_fifo emul_fifo[$];
+        mon_chkr_mbx_t mon_chkr_mbx;
+        sb_chkr_mbx_t  sb_chkr_mbx;
 
-        trans_sb_mbx   chkr_sb_mbx;
-        trans_fifo_mbx drv_chkr_mbx;
-
-        int contador_auxiliar;
+        int comparaciones;
+        int errores;
 
         function new();
-            this.emul_fifo = {};
-            this.contador_auxiliar = 0;
+
+            comparaciones = 0;
+            errores = 0;
+
         endfunction
 
         task run();
+
             $display("[%0t] Checker inicializado", $time);
 
             forever begin
-                to_sb = new();
-                to_sb.clean();
 
-                drv_chkr_mbx.get(transaccion);
-                transaccion.print("Checker recibe");
+                mon_chkr_mbx.get(trans_obs);
+                sb_chkr_mbx.get(trans_exp);
 
-                case (transaccion.tipo)
+                comparaciones++;
 
-                    lectura: begin
-                        if (emul_fifo.size() > 0) begin
-                            auxiliar = emul_fifo.pop_front();
+                $display("\n[%0t] Checker compara transaccion #%0d", $time, comparaciones);
+                trans_exp.print("Esperada");
+                trans_obs.print("Observada");
 
-                            if (transaccion.dato == auxiliar.dato) begin
-                                to_sb.dato_enviado = auxiliar.dato;
-                                to_sb.tiempo_push  = auxiliar.tiempo;
-                                to_sb.tiempo_pop   = transaccion.tiempo;
-                                to_sb.completado   = 1'b1;
-                                to_sb.calc_latencia();
-                                to_sb.print("Checker: lectura completada");
+                if (trans_obs.tipo !== trans_exp.tipo) begin
+
+                    errores++;
+                    $display("[%0t] Checker ERROR: tipo observado=%0d esperado=%0d",
+                             $time, trans_obs.tipo, trans_exp.tipo);
+                end
+
+                else begin
+                    case (trans_exp.tipo)
+
+                        reset: begin
+
+                            $display("[%0t] Checker PASS: reset observado correctamente", $time);
+
+                        end
+
+                        escritura: begin
+                            if (trans_obs.dato !== trans_exp.dato) begin
+
+                                errores++;
+                                $display("[%0t] Checker ERROR escritura: dato observado=%0h esperado=%0h",
+                                         $time, trans_obs.dato, trans_exp.dato);
+
                             end
+
                             else begin
-                                $display("[%0t] Checker ERROR: dato leido=%0h esperado=%0h",
-                                         $time, transaccion.dato, auxiliar.dato);
+
+                                $display("[%0t] Checker PASS: escritura correcta", $time);
+
                             end
                         end
-                        else begin
-                            to_sb.tiempo_pop = transaccion.tiempo;
-                            to_sb.underflow  = 1'b1;
-                            to_sb.print("Checker: underflow");
-                        end
 
-                        chkr_sb_mbx.put(to_sb);
-                    end
+                        lectura: begin
 
-                    escritura: begin
-                        if (emul_fifo.size() < DEPTH) begin
-                            auxiliar = new();
-                            auxiliar.dato    = transaccion.dato;
-                            auxiliar.tiempo  = transaccion.tiempo;
-                            auxiliar.tipo    = transaccion.tipo;
-                            auxiliar.retardo = transaccion.retardo;
+                            if (trans_obs.dato !== trans_exp.dato) begin
 
-                            emul_fifo.push_back(auxiliar);
+                                errores++;
+                                $display("[%0t] Checker ERROR lectura: dato observado=%0h esperado=%0h",
+                                         $time, trans_obs.dato, trans_exp.dato);
 
-                            to_sb.dato_enviado = auxiliar.dato;
-                            to_sb.tiempo_push  = auxiliar.tiempo;
-                            to_sb.print("Checker: escritura aceptada");
-                        end
-                        else begin
-                            to_sb.dato_enviado = transaccion.dato;
-                            to_sb.tiempo_push  = transaccion.tiempo;
-                            to_sb.overflow     = 1'b1;
-                            to_sb.print("Checker: overflow");
-                        end
-
-                        chkr_sb_mbx.put(to_sb);
-                    end
-
-                    reset: begin
-                        contador_auxiliar = emul_fifo.size();
-
-                        for (int i = 0; i < contador_auxiliar; i++) begin
-                            auxiliar = emul_fifo.pop_front();
-                        end
-
-                        to_sb.reset = 1'b1;
-                        to_sb.print("Checker: reset");
-                        chkr_sb_mbx.put(to_sb);
-                    end
-
-                    lectura_escritura: begin
-                        // Version inicial simple:
-                        // primero intenta lectura y luego escritura.
-                        if (emul_fifo.size() > 0) begin
-                            auxiliar = emul_fifo.pop_front();
-
-                            if (transaccion.dato == auxiliar.dato) begin
-                                to_sb.dato_enviado = auxiliar.dato;
-                                to_sb.tiempo_push  = auxiliar.tiempo;
-                                to_sb.tiempo_pop   = transaccion.tiempo;
-                                to_sb.completado   = 1'b1;
-                                to_sb.calc_latencia();
                             end
+
                             else begin
-                                $display("[%0t] Checker ERROR en lectura_escritura: dato leido=%0h esperado=%0h",
-                                         $time, transaccion.dato, auxiliar.dato);
+
+                                $display("[%0t] Checker PASS: lectura correcta", $time);
+
                             end
                         end
-                        else begin
-                            to_sb.underflow = 1'b1;
+
+                        lectura_escritura: begin
+
+                            if (trans_obs.dato !== trans_exp.dato) begin
+
+                                errores++;
+                                $display("[%0t] Checker ERROR lectura_escritura: dato observado=%0h esperado=%0h",
+                                         $time, trans_obs.dato, trans_exp.dato);
+
+                            end
+
+                            else begin
+
+                                $display("[%0t] Checker PASS: lectura_escritura correcta", $time);
+
+                            end
+
                         end
 
-                        if (emul_fifo.size() < DEPTH) begin
-                            auxiliar = new();
-                            auxiliar.dato    = transaccion.dato;
-                            auxiliar.tiempo  = transaccion.tiempo;
-                            auxiliar.tipo    = escritura;
-                            auxiliar.retardo = transaccion.retardo;
-                            emul_fifo.push_back(auxiliar);
-                        end
-                        else begin
-                            to_sb.overflow = 1'b1;
+                        default: begin
+
+                            errores++;
+                            $display("[%0t] Checker ERROR: tipo no valido", $time);
+
                         end
 
-                        to_sb.print("Checker: lectura_escritura");
-                        chkr_sb_mbx.put(to_sb);
-                    end
+                    endcase
 
-                    default: begin
-                        $display("[%0t] Checker ERROR: tipo de transaccion no valido", $time);
-                    end
+                end
 
-                endcase
             end
+
         endtask
 
     endclass
 
-        class scoreboard #(parameter int WIDTH = 8);
+    class scoreboard #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
-        trans_sb #(WIDTH) transaccion_entrante;
-        trans_sb_mbx chkr_sb_mbx;
+        trans_fifo #(WIDTH) transaccion_esperada;
+        trans_fifo #(WIDTH) tr_chk;
+
+        agt_sb_mbx_t agt_sb_mbx;
+        sb_chkr_mbx_t sb_chkr_mbx;
         comando_test_sb_mbx test_sb_mbx;
 
-        int transacciones_completadas;
-        int overflows;
-        int underflows;
-        int resets;
-        int retardo_total;
+        int transacciones_esperadas;
         int reportes_generados;
 
         function new();
 
-            transacciones_completadas = 0;
-            overflows = 0;
-            underflows = 0;
-            resets = 0;
-            retardo_total = 0;
+            transacciones_esperadas = 0;
             reportes_generados = 0;
 
         endfunction
 
         task run();
 
+            solicitud_sb solicitud;
+
             $display("[%0t] Scoreboard inicializado", $time);
 
-            forever begin
-                chkr_sb_mbx.get(transaccion_entrante);
+            fork
+                forever begin
+                    agt_sb_mbx.get(transaccion_esperada);
 
-                if (transaccion_entrante.completado) begin
+                    tr_chk = new();
+                    tr_chk.dato        = transaccion_esperada.dato;
+                    tr_chk.retardo     = transaccion_esperada.retardo;
+                    tr_chk.tiempo      = transaccion_esperada.tiempo;
+                    tr_chk.tipo        = transaccion_esperada.tipo;
+                    tr_chk.max_retardo = transaccion_esperada.max_retardo;
 
-                    transacciones_completadas++;
-                    retardo_total += transaccion_entrante.latencia;
+                    transacciones_esperadas++;
+                    sb_chkr_mbx.put(tr_chk);
+
+                    tr_chk.print("Scoreboard envia esperado");
+                end
+
+                forever begin
+                    test_sb_mbx.get(solicitud);
+
+                    case (solicitud)
+                        reporte: begin
+
+                            reportes_generados++;
+                            $display("\n========== REPORTE SCOREBOARD ==========");
+                            $display("Reportes generados        = %0d", reportes_generados);
+                            $display("Transacciones esperadas   = %0d", transacciones_esperadas);
+                            $display("========================================\n");
+
+                        end
+
+                        retardo_promedio: begin
+
+                            reportes_generados++;
+                            $display("\n========== REPORTE SCOREBOARD ==========");
+                            $display("Retardo promedio: aun no implementado en esta etapa");
+                            $display("========================================\n");
+
+                        end
+
+                        default: begin
+
+                            $display("[%0t] Scoreboard ERROR: solicitud no valida", $time);
+
+                        end
+
+                    endcase
 
                 end
 
-                if (transaccion_entrante.overflow) begin
+            join_none
 
-                    overflows++;
-
-                end
-
-                if (transaccion_entrante.underflow) begin
-
-                    underflows++;
-
-                end
-
-                if (transaccion_entrante.reset) begin
-
-                    resets++;
-
-                end
-
-                transaccion_entrante.print("Scoreboard recibe");
-
-            end
-        endtask
-
-        task reporte();
-            int retardo_promedio;
-
-            reportes_generados++;
-
-            if (transacciones_completadas > 0) begin
-
-                retardo_promedio = retardo_total / transacciones_completadas;
-
-            end
-            else begin
-
-                retardo_promedio = 0;
-
-            end
-
-            $display("\n========== REPORTE SCOREBOARD ==========");
-            $display("Reportes generados         = %0d", reportes_generados);
-            $display("Transacciones completadas  = %0d", transacciones_completadas);
-            $display("Overflows                  = %0d", overflows);
-            $display("Underflows                 = %0d", underflows);
-            $display("Resets                     = %0d", resets);
-            $display("Retardo promedio           = %0d", retardo_promedio);
-            $display("========================================\n");
         endtask
 
     endclass
 
-        class agent #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+    class agent #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
         trans_fifo #(WIDTH) transaccion;
         comando_test_agent_mbx tst_agnt_mbx;
         trans_fifo_mbx ant_drvr_mbx;
-        trans_fifo_mbx drv_chkr_mbx;
+        agt_sb_mbx_t agt_sb_mbx;
 
         int num_transacciones;
         int max_retardo;
 
         function new();
+
             num_transacciones = 10;
             max_retardo = 10;
+
         endfunction
 
         task generar_y_enviar(trans_fifo #(WIDTH) tr);
+
+            trans_fifo #(WIDTH) tr_sb;
+
             tr.max_retardo = max_retardo;
 
             ant_drvr_mbx.put(tr);
-            drv_chkr_mbx.put(tr);
+
+            tr_sb = new();
+
+            tr_sb.dato        = tr.dato;
+            tr_sb.retardo     = tr.retardo;
+            tr_sb.tiempo      = tr.tiempo;
+            tr_sb.tipo        = tr.tipo;
+            tr_sb.max_retardo = tr.max_retardo;
+
+            agt_sb_mbx.put(tr_sb);
 
             tr.print("Agent envia");
+
         endtask
 
         task run();
@@ -454,11 +444,13 @@ package fifo_p;
             $display("[%0t] Agent inicializado", $time);
 
             forever begin
+
                 tst_agnt_mbx.get(instruccion);
 
                 case (instruccion)
 
                     trans_aleatoria: begin
+
                         transaccion = new();
 
                         assert(transaccion.randomize())
@@ -469,6 +461,7 @@ package fifo_p;
                     end
 
                     trans_especifica: begin
+
                         transaccion = new();
                         transaccion.tipo = escritura;
                         transaccion.dato = 'hA5;
@@ -479,7 +472,9 @@ package fifo_p;
                     end
 
                     llenado_aleatorio: begin
+
                         for (int i = 0; i < DEPTH; i++) begin
+
                             transaccion = new();
                             transaccion.tipo = escritura;
 
@@ -492,11 +487,14 @@ package fifo_p;
 
                             transaccion.tiempo = $time;
                             generar_y_enviar(transaccion);
+
                         end
                     end
 
                     sec_trans_aleatorias: begin
+
                         for (int i = 0; i < num_transacciones; i++) begin
+
                             transaccion = new();
 
                             assert(transaccion.randomize())
@@ -504,16 +502,152 @@ package fifo_p;
 
                             transaccion.tiempo = $time;
                             generar_y_enviar(transaccion);
+
                         end
                     end
 
                     default: begin
+
                         $display("[%0t] Agent ERROR: instruccion no valida", $time);
+
                     end
 
                 endcase
             end
         endtask
+
+    endclass
+
+    class ambiente #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+
+        virtual fifo_if #(WIDTH) vif;
+
+        driver     #(WIDTH)        drv;
+        monitor    #(WIDTH)        mon;
+        checker    #(WIDTH, DEPTH) chkr;
+        scoreboard #(WIDTH, DEPTH) sb;
+        agent      #(WIDTH, DEPTH) agt;
+
+        comando_test_agent_mbx tst_agnt_mbx;
+        comando_test_sb_mbx    tst_sb_mbx;
+        trans_fifo_mbx         ant_drvr_mbx;
+        agt_sb_mbx_t           agt_sb_mbx;
+        mon_chkr_mbx_t         mon_chkr_mbx;
+        sb_chkr_mbx_t          sb_chkr_mbx;
+
+        function new(virtual fifo_if #(WIDTH) vif);
+
+            this.vif = vif;
+
+            tst_agnt_mbx = new();
+            tst_sb_mbx   = new();
+            ant_drvr_mbx = new();
+            agt_sb_mbx   = new();
+            mon_chkr_mbx = new();
+            sb_chkr_mbx  = new();
+
+            drv  = new(vif, ant_drvr_mbx);
+            mon  = new(vif, mon_chkr_mbx);
+            chkr = new();
+            sb   = new();
+            agt  = new();
+
+            agt.tst_agnt_mbx = tst_agnt_mbx;
+            agt.ant_drvr_mbx = ant_drvr_mbx;
+            agt.agt_sb_mbx   = agt_sb_mbx;
+
+            sb.agt_sb_mbx    = agt_sb_mbx;
+            sb.sb_chkr_mbx   = sb_chkr_mbx;
+            sb.test_sb_mbx   = tst_sb_mbx;
+
+            chkr.mon_chkr_mbx = mon_chkr_mbx;
+            chkr.sb_chkr_mbx  = sb_chkr_mbx;
+
+        endfunction
+
+        task run();
+
+            $display("[%0t] Ambiente inicializado", $time);
+
+            fork
+
+                drv.run();
+                mon.run();
+                chkr.run();
+                sb.run();
+                agt.run();
+
+            join_none
+
+        endtask
+
+    endclass
+
+    class test #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+
+    ambiente #(WIDTH, DEPTH) amb;
+    virtual fifo_if #(WIDTH) vif;
+
+    int num_transacciones;
+    int max_retardo;
+
+    instrucciones_agente instr_agent;
+    solicitud_sb instr_sb;
+
+    function new(virtual fifo_if #(WIDTH) vif);
+        
+        this.vif = vif;
+
+        num_transacciones = 10;
+        max_retardo = 10;
+
+        amb = new(vif);
+
+        amb.agt.num_transacciones = num_transacciones;
+        amb.agt.max_retardo = max_retardo;
+
+    endfunction
+
+    task run();
+        $display("[%0t] Test inicializado", $time);
+
+        fork
+            amb.run();
+        join_none
+
+        #10;
+
+        instr_agent = llenado_aleatorio;
+        amb.tst_agnt_mbx.put(instr_agent);
+        $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
+
+        #50;
+
+        instr_agent = trans_aleatoria;
+        amb.tst_agnt_mbx.put(instr_agent);
+        $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
+
+        #50;
+
+        instr_agent = trans_especifica;
+        amb.tst_agnt_mbx.put(instr_agent);
+        $display("[%0t] Test: envia instruccion trans_especifica", $time);
+
+        #50;
+
+        instr_agent = sec_trans_aleatorias;
+        amb.tst_agnt_mbx.put(instr_agent);
+        $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
+        
+      #200;
+
+        instr_sb = reporte;
+        amb.tst_sb_mbx.put(instr_sb);
+        $display("[%0t] Test: solicita reporte al scoreboard", $time);
+
+        #50;
+
+    endtask
 
     endclass
 
