@@ -409,7 +409,7 @@ package fifo_p;
             else begin
 
                 retardo_promedio = 0;
-                
+
             end
 
             $display("\n========== REPORTE SCOREBOARD ==========");
@@ -420,6 +420,99 @@ package fifo_p;
             $display("Resets                     = %0d", resets);
             $display("Retardo promedio           = %0d", retardo_promedio);
             $display("========================================\n");
+        endtask
+
+    endclass
+
+        class agent #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+
+        trans_fifo #(WIDTH) transaccion;
+        comando_test_agent_mbx tst_agnt_mbx;
+        trans_fifo_mbx ant_drvr_mbx;
+        trans_fifo_mbx drv_chkr_mbx;
+
+        int num_transacciones;
+        int max_retardo;
+
+        function new();
+            num_transacciones = 10;
+            max_retardo = 10;
+        endfunction
+
+        task generar_y_enviar(trans_fifo #(WIDTH) tr);
+            tr.max_retardo = max_retardo;
+
+            ant_drvr_mbx.put(tr);
+            drv_chkr_mbx.put(tr);
+
+            tr.print("Agent envia");
+        endtask
+
+        task run();
+            instrucciones_agente instruccion;
+
+            $display("[%0t] Agent inicializado", $time);
+
+            forever begin
+                tst_agnt_mbx.get(instruccion);
+
+                case (instruccion)
+
+                    trans_aleatoria: begin
+                        transaccion = new();
+
+                        assert(transaccion.randomize())
+                        else $display("[%0t] ERROR: no se pudo randomizar transaccion", $time);
+
+                        transaccion.tiempo = $time;
+                        generar_y_enviar(transaccion);
+                    end
+
+                    trans_especifica: begin
+                        transaccion = new();
+                        transaccion.tipo = escritura;
+                        transaccion.dato = 'hA5;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo = $time;
+
+                        generar_y_enviar(transaccion);
+                    end
+
+                    llenado_aleatorio: begin
+                        for (int i = 0; i < DEPTH; i++) begin
+                            transaccion = new();
+                            transaccion.tipo = escritura;
+
+                            assert(transaccion.randomize() with {
+                                tipo == escritura;
+                                retardo >= 0;
+                                retardo <= max_retardo;
+                            })
+                            else $display("[%0t] ERROR: no se pudo randomizar llenado", $time);
+
+                            transaccion.tiempo = $time;
+                            generar_y_enviar(transaccion);
+                        end
+                    end
+
+                    sec_trans_aleatorias: begin
+                        for (int i = 0; i < num_transacciones; i++) begin
+                            transaccion = new();
+
+                            assert(transaccion.randomize())
+                            else $display("[%0t] ERROR: no se pudo randomizar secuencia", $time);
+
+                            transaccion.tiempo = $time;
+                            generar_y_enviar(transaccion);
+                        end
+                    end
+
+                    default: begin
+                        $display("[%0t] Agent ERROR: instruccion no valida", $time);
+                    end
+
+                endcase
+            end
         endtask
 
     endclass
