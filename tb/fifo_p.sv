@@ -195,4 +195,233 @@ package fifo_p;
 
     endclass
 
+        class checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+
+        trans_fifo #(WIDTH) transaccion;
+        trans_fifo #(WIDTH) auxiliar;
+        trans_sb   #(WIDTH) to_sb;
+
+        trans_fifo emul_fifo[$];
+
+        trans_sb_mbx   chkr_sb_mbx;
+        trans_fifo_mbx drv_chkr_mbx;
+
+        int contador_auxiliar;
+
+        function new();
+            this.emul_fifo = {};
+            this.contador_auxiliar = 0;
+        endfunction
+
+        task run();
+            $display("[%0t] Checker inicializado", $time);
+
+            forever begin
+                to_sb = new();
+                to_sb.clean();
+
+                drv_chkr_mbx.get(transaccion);
+                transaccion.print("Checker recibe");
+
+                case (transaccion.tipo)
+
+                    lectura: begin
+                        if (emul_fifo.size() > 0) begin
+                            auxiliar = emul_fifo.pop_front();
+
+                            if (transaccion.dato == auxiliar.dato) begin
+                                to_sb.dato_enviado = auxiliar.dato;
+                                to_sb.tiempo_push  = auxiliar.tiempo;
+                                to_sb.tiempo_pop   = transaccion.tiempo;
+                                to_sb.completado   = 1'b1;
+                                to_sb.calc_latencia();
+                                to_sb.print("Checker: lectura completada");
+                            end
+                            else begin
+                                $display("[%0t] Checker ERROR: dato leido=%0h esperado=%0h",
+                                         $time, transaccion.dato, auxiliar.dato);
+                            end
+                        end
+                        else begin
+                            to_sb.tiempo_pop = transaccion.tiempo;
+                            to_sb.underflow  = 1'b1;
+                            to_sb.print("Checker: underflow");
+                        end
+
+                        chkr_sb_mbx.put(to_sb);
+                    end
+
+                    escritura: begin
+                        if (emul_fifo.size() < DEPTH) begin
+                            auxiliar = new();
+                            auxiliar.dato    = transaccion.dato;
+                            auxiliar.tiempo  = transaccion.tiempo;
+                            auxiliar.tipo    = transaccion.tipo;
+                            auxiliar.retardo = transaccion.retardo;
+
+                            emul_fifo.push_back(auxiliar);
+
+                            to_sb.dato_enviado = auxiliar.dato;
+                            to_sb.tiempo_push  = auxiliar.tiempo;
+                            to_sb.print("Checker: escritura aceptada");
+                        end
+                        else begin
+                            to_sb.dato_enviado = transaccion.dato;
+                            to_sb.tiempo_push  = transaccion.tiempo;
+                            to_sb.overflow     = 1'b1;
+                            to_sb.print("Checker: overflow");
+                        end
+
+                        chkr_sb_mbx.put(to_sb);
+                    end
+
+                    reset: begin
+                        contador_auxiliar = emul_fifo.size();
+
+                        for (int i = 0; i < contador_auxiliar; i++) begin
+                            auxiliar = emul_fifo.pop_front();
+                        end
+
+                        to_sb.reset = 1'b1;
+                        to_sb.print("Checker: reset");
+                        chkr_sb_mbx.put(to_sb);
+                    end
+
+                    lectura_escritura: begin
+                        // Version inicial simple:
+                        // primero intenta lectura y luego escritura.
+                        if (emul_fifo.size() > 0) begin
+                            auxiliar = emul_fifo.pop_front();
+
+                            if (transaccion.dato == auxiliar.dato) begin
+                                to_sb.dato_enviado = auxiliar.dato;
+                                to_sb.tiempo_push  = auxiliar.tiempo;
+                                to_sb.tiempo_pop   = transaccion.tiempo;
+                                to_sb.completado   = 1'b1;
+                                to_sb.calc_latencia();
+                            end
+                            else begin
+                                $display("[%0t] Checker ERROR en lectura_escritura: dato leido=%0h esperado=%0h",
+                                         $time, transaccion.dato, auxiliar.dato);
+                            end
+                        end
+                        else begin
+                            to_sb.underflow = 1'b1;
+                        end
+
+                        if (emul_fifo.size() < DEPTH) begin
+                            auxiliar = new();
+                            auxiliar.dato    = transaccion.dato;
+                            auxiliar.tiempo  = transaccion.tiempo;
+                            auxiliar.tipo    = escritura;
+                            auxiliar.retardo = transaccion.retardo;
+                            emul_fifo.push_back(auxiliar);
+                        end
+                        else begin
+                            to_sb.overflow = 1'b1;
+                        end
+
+                        to_sb.print("Checker: lectura_escritura");
+                        chkr_sb_mbx.put(to_sb);
+                    end
+
+                    default: begin
+                        $display("[%0t] Checker ERROR: tipo de transaccion no valido", $time);
+                    end
+
+                endcase
+            end
+        endtask
+
+    endclass
+
+        class scoreboard #(parameter int WIDTH = 8);
+
+        trans_sb #(WIDTH) transaccion_entrante;
+        trans_sb_mbx chkr_sb_mbx;
+        comando_test_sb_mbx test_sb_mbx;
+
+        int transacciones_completadas;
+        int overflows;
+        int underflows;
+        int resets;
+        int retardo_total;
+        int reportes_generados;
+
+        function new();
+
+            transacciones_completadas = 0;
+            overflows = 0;
+            underflows = 0;
+            resets = 0;
+            retardo_total = 0;
+            reportes_generados = 0;
+
+        endfunction
+
+        task run();
+
+            $display("[%0t] Scoreboard inicializado", $time);
+
+            forever begin
+                chkr_sb_mbx.get(transaccion_entrante);
+
+                if (transaccion_entrante.completado) begin
+
+                    transacciones_completadas++;
+                    retardo_total += transaccion_entrante.latencia;
+
+                end
+
+                if (transaccion_entrante.overflow) begin
+
+                    overflows++;
+
+                end
+
+                if (transaccion_entrante.underflow) begin
+
+                    underflows++;
+
+                end
+
+                if (transaccion_entrante.reset) begin
+
+                    resets++;
+
+                end
+
+                transaccion_entrante.print("Scoreboard recibe");
+
+            end
+        endtask
+
+        task reporte();
+            int retardo_promedio;
+
+            reportes_generados++;
+
+            if (transacciones_completadas > 0) begin
+
+                retardo_promedio = retardo_total / transacciones_completadas;
+
+            end
+            else begin
+
+                retardo_promedio = 0;
+                
+            end
+
+            $display("\n========== REPORTE SCOREBOARD ==========");
+            $display("Reportes generados         = %0d", reportes_generados);
+            $display("Transacciones completadas  = %0d", transacciones_completadas);
+            $display("Overflows                  = %0d", overflows);
+            $display("Underflows                 = %0d", underflows);
+            $display("Resets                     = %0d", resets);
+            $display("Retardo promedio           = %0d", retardo_promedio);
+            $display("========================================\n");
+        endtask
+
+    endclass
+
 endpackage
