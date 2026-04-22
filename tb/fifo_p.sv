@@ -201,7 +201,7 @@ package fifo_p;
 
     endclass
 
-    class checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
+    class fifo_checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
         trans_fifo #(WIDTH) trans_obs;
         trans_fifo #(WIDTH) trans_exp;
@@ -524,7 +524,7 @@ package fifo_p;
 
         driver     #(WIDTH)        drv;
         monitor    #(WIDTH)        mon;
-        checker    #(WIDTH, DEPTH) chkr;
+        fifo_checker    #(WIDTH, DEPTH) chkr;
         scoreboard #(WIDTH, DEPTH) sb;
         agent      #(WIDTH, DEPTH) agt;
 
