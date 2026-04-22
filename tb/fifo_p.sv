@@ -82,4 +82,117 @@ package fifo_p;
     typedef mailbox #(solicitud_sb) comando_test_sb_mbx;
     typedef mailbox #(instrucciones_agente) comando_test_agent_mbx;
 
+    class driver #(parameter int WIDTH = 8);
+
+        virtual fifo_if #(WIDTH) vif;
+        trans_fifo_mbx drv_mbx;
+
+        function new(virtual fifo_if #(WIDTH) vif, trans_fifo_mbx drv_mbx);
+            this.vif = vif;
+            this.drv_mbx = drv_mbx;
+        endfunction
+
+        task run();
+            trans_fifo #(WIDTH) tr;
+
+            forever begin
+                drv_mbx.get(tr);
+
+                repeat (tr.retardo) @(posedge vif.clk);
+
+                case (tr.tipo)
+                    reset: begin
+                        @(posedge vif.clk);
+                        vif.rst  <= 1'b1;
+                        vif.push <= 1'b0;
+                        vif.pop  <= 1'b0;
+                        vif.din  <= '0;
+
+                        @(posedge vif.clk);
+                        vif.rst <= 1'b0;
+                    end
+
+                    escritura: begin
+                        @(posedge vif.clk);
+                        vif.rst  <= 1'b0;
+                        vif.push <= 1'b1;
+                        vif.pop  <= 1'b0;
+                        vif.din  <= tr.dato;
+
+                        @(posedge vif.clk);
+                        vif.push <= 1'b0;
+                    end
+
+                    lectura: begin
+                        @(posedge vif.clk);
+                        vif.rst  <= 1'b0;
+                        vif.push <= 1'b0;
+                        vif.pop  <= 1'b1;
+
+                        @(posedge vif.clk);
+                        vif.pop <= 1'b0;
+                    end
+
+                    lectura_escritura: begin
+                        @(posedge vif.clk);
+                        vif.rst  <= 1'b0;
+                        vif.push <= 1'b1;
+                        vif.pop  <= 1'b1;
+                        vif.din  <= tr.dato;
+
+                        @(posedge vif.clk);
+                        vif.push <= 1'b0;
+                        vif.pop  <= 1'b0;
+                    end
+                endcase
+            end
+        endtask
+
+    endclass
+
+
+    class monitor #(parameter int WIDTH = 8);
+
+        virtual fifo_if #(WIDTH) vif;
+        trans_sb_mbx mon_mbx;
+
+        function new(virtual fifo_if #(WIDTH) vif, trans_sb_mbx mon_mbx);
+            this.vif = vif;
+            this.mon_mbx = mon_mbx;
+        endfunction
+
+        task run();
+            trans_sb #(WIDTH) tr_sb;
+
+            forever begin
+                @(posedge vif.clk);
+
+                tr_sb = new();
+                tr_sb.clean();
+
+                if (vif.rst) begin
+                    tr_sb.reset = 1'b1;
+                    mon_mbx.put(tr_sb);
+                end
+                else if (vif.push && !vif.pop) begin
+                    tr_sb.dato_enviado = vif.din;
+                    tr_sb.tiempo_push  = $time;
+                    mon_mbx.put(tr_sb);
+                end
+                else if (vif.pop && !vif.push) begin
+                    tr_sb.dato_enviado = vif.dout;
+                    tr_sb.tiempo_pop   = $time;
+                    mon_mbx.put(tr_sb);
+                end
+                else if (vif.push && vif.pop) begin
+                    tr_sb.dato_enviado = vif.din;
+                    tr_sb.tiempo_push  = $time;
+                    tr_sb.tiempo_pop   = $time;
+                    mon_mbx.put(tr_sb);
+                end
+            end
+        endtask
+
+    endclass
+
 endpackage
