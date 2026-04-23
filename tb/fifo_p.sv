@@ -75,7 +75,15 @@ package fifo_p;
     endclass
 
     typedef enum {retardo_promedio, reporte} solicitud_sb;
-    typedef enum {llenado_aleatorio, trans_aleatoria, trans_especifica, sec_trans_aleatorias, overflow_dirigido, underflow_dirigido} instrucciones_agente;
+    typedef enum {
+        llenado_aleatorio, 
+        trans_aleatoria, 
+        trans_especifica, 
+        sec_trans_aleatorias, 
+        overflow_dirigido, 
+        underflow_dirigido, 
+        reset_dirigido
+    } instrucciones_agente;
 
     typedef mailbox #(trans_fifo) trans_fifo_mbx;
     typedef mailbox #(trans_sb) trans_sb_mbx;
@@ -700,6 +708,44 @@ endclass
 
                     end
 
+                    reset_dirigido: begin
+
+                        for (int i = 0; i < 4; i++) begin
+
+                            transaccion = new();
+                            transaccion.tipo = escritura;
+
+                            assert(transaccion.randomize() with {
+
+                                tipo == escritura;
+                                retardo >= 0;
+                                retardo <= max_retardo;
+                            })
+                            else $display("[%0t] ERROR: no se pudo randomizar reset_dirigido escritura", $time);
+
+                            transaccion.tiempo = $time;
+                            generar_y_enviar(transaccion);
+                        end
+
+                         // Aplica reset
+                        transaccion = new();
+                        transaccion.tipo = reset;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo = $time;
+                        transaccion.dato = '0;
+                        generar_y_enviar(transaccion);
+
+                        // Intenta una lectura después del reset
+                        transaccion = new();
+                        transaccion.tipo = lectura;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo = $time;
+                        transaccion.dato = '0;
+                        generar_y_enviar(transaccion);
+
+                    end
+                        
+
                     default: begin
 
                         $display("[%0t] Agent ERROR: instruccion no valida", $time);
@@ -798,7 +844,7 @@ endclass
            max_retardo = 10;
 
            // Cambia modo según prueba a correr
-           modo_prueba = "UNDERFLOW";
+           modo_prueba = "RESET";
 
            amb = new(vif);
 
@@ -872,21 +918,13 @@ endclass
 
                         $display("[%0t] Test: ejecuta underflow_dirigido", $time);
                     end
-                
-                    "RESET": begin
-                        instr_agent = llenado_aleatorio;
+
+                   "RESET": begin
+
+                        instr_agent = reset_dirigido;
                         amb.tst_agnt_mbx.put(instr_agent);
 
-                        $display("[%0t] Test: llena parcialmente la FIFO", $time);
-                    
-                        repeat (5) begin
-                            @(posedge vif.clk);
-                        end
-                    
-                        instr_agent = sec_trans_aleatorias;
-                        amb.tst_agnt_mbx.put(instr_agent);
-
-                        $display("[%0t] Test: mezcla operaciones con posibilidad de reset", $time);
+                        $display("[%0t] Test: ejecuta reset_dirigido", $time);
                     end
                 
                     "SIMULTANEO": begin
