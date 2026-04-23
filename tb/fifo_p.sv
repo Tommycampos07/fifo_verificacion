@@ -844,7 +844,7 @@ endclass
            max_retardo = 10;
 
            // Cambia modo según prueba a correr
-           modo_prueba = "RESET";
+           modo_prueba = "SIMULTANEO";
 
            amb = new(vif);
 
