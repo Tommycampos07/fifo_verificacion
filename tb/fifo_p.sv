@@ -75,7 +75,7 @@ package fifo_p;
     endclass
 
     typedef enum {retardo_promedio, reporte} solicitud_sb;
-    typedef enum {llenado_aleatorio, trans_aleatoria, trans_especifica, sec_trans_aleatorias} instrucciones_agente;
+    typedef enum {llenado_aleatorio, trans_aleatoria, trans_especifica, sec_trans_aleatorias, overflow_dirigido, underflow_dirigido} instrucciones_agente;
 
     typedef mailbox #(trans_fifo) trans_fifo_mbx;
     typedef mailbox #(trans_sb) trans_sb_mbx;
@@ -162,10 +162,12 @@ package fifo_p;
 
     trans_fifo #(WIDTH) obs_fifo[$];
     trans_fifo #(WIDTH) aux;
+    bit inicio_completado;
 
     function new(virtual fifo_if #(WIDTH) vif, mon_chkr_mbx_t mon_chkr_mbx);
         this.vif = vif;
         this.mon_chkr_mbx = mon_chkr_mbx;
+        this.inicio_completado = 0;
     endfunction
 
     task run();
@@ -177,79 +179,99 @@ package fifo_p;
             if (vif.rst) begin
                 obs_fifo.delete();
 
-                tr_mon = new();
-                tr_mon.clean();
-                tr_mon.tiempo = $time;
-                tr_mon.tipo   = reset;
-                tr_mon.dato   = '0;
+                if (inicio_completado) begin
+                    tr_mon = new();
+                    tr_mon.clean();
+                    tr_mon.tiempo = $time;
+                    tr_mon.tipo   = reset;
+                    tr_mon.dato   = '0;
+                
+                    mon_chkr_mbx.put(tr_mon);
+                    tr_mon.print("Monitor envia");
 
-                mon_chkr_mbx.put(tr_mon);
-                tr_mon.print("Monitor envia");
+                end
             end
 
             else if (vif.push && !vif.pop) begin
-                // Observa escritura
-                aux = new();
-                aux.clean();
-                aux.tiempo = $time;
-                aux.tipo   = escritura;
-                aux.dato   = vif.din;
-                obs_fifo.push_back(aux);
 
                 tr_mon = new();
                 tr_mon.clean();
                 tr_mon.tiempo = $time;
                 tr_mon.tipo   = escritura;
-                tr_mon.dato   = vif.din;
 
+                if (!vif.full) begin
+
+                    aux = new();
+                    aux.clean();
+                    aux.tiempo = $time;
+                    aux.tipo   = escritura;
+                    aux.dato   = vif.din;
+                    obs_fifo.push_back(aux);
+                
+                    tr_mon.dato = vif.din;
+                end
+                else begin
+                    tr_mon.dato = '0;
+                end
+            
                 mon_chkr_mbx.put(tr_mon);
                 tr_mon.print("Monitor envia");
+                inicio_completado = 1;
             end
 
             else if (!vif.push && vif.pop) begin
-                // Observa lectura
+
                 tr_mon = new();
                 tr_mon.clean();
                 tr_mon.tiempo = $time;
                 tr_mon.tipo   = lectura;
-
-                if (obs_fifo.size() > 0) begin
+ 
+                if (vif.pndng && obs_fifo.size() > 0) begin
                     aux = obs_fifo.pop_front();
                     tr_mon.dato = aux.dato;
                 end
                 else begin
                     tr_mon.dato = '0;
                 end
-
+            
                 mon_chkr_mbx.put(tr_mon);
                 tr_mon.print("Monitor envia");
+                inicio_completado = 1;
+            
             end
 
             else if (vif.push && vif.pop) begin
-                // Observa lectura/escritura simultánea
-                tr_mon = new();
-                tr_mon.clean();
-                tr_mon.tiempo = $time;
-                tr_mon.tipo   = lectura_escritura;
 
-                if (obs_fifo.size() > 0) begin
-                    aux = obs_fifo.pop_front();
-                    tr_mon.dato = aux.dato;
-                end
-                else begin
-                    tr_mon.dato = '0;
-                end
+               tr_mon = new();
+               tr_mon.clean();
+               tr_mon.tiempo = $time;
+               tr_mon.tipo   = lectura_escritura;
 
-                // Luego entra el nuevo dato al final
-                aux = new();
-                aux.clean();
-                aux.tiempo = $time;
-                aux.tipo   = escritura;
-                aux.dato   = vif.din;
-                obs_fifo.push_back(aux);
+               if (vif.pndng && obs_fifo.size() > 0) begin
 
-                mon_chkr_mbx.put(tr_mon);
-                tr_mon.print("Monitor envia");
+                   aux = obs_fifo.pop_front();
+                   tr_mon.dato = aux.dato;
+
+               end
+               else begin
+
+                   tr_mon.dato = '0;
+               end
+            
+               if (!vif.full || vif.pndng) begin
+
+                   aux = new();
+                   aux.clean();
+                   aux.tiempo = $time;
+                   aux.tipo   = escritura;
+                   aux.dato   = vif.din;
+                   obs_fifo.push_back(aux);
+               end
+            
+               mon_chkr_mbx.put(tr_mon);
+               tr_mon.print("Monitor envia");
+               inicio_completado = 1;
+            
             end
         end
     endtask
@@ -422,9 +444,13 @@ endclass
                            ref_aux.tipo        = transaccion_esperada.tipo;
                            ref_aux.max_retardo = transaccion_esperada.max_retardo;
 
-                           ref_fifo.push_back(ref_aux);
-
-                           tr_chk.dato = transaccion_esperada.dato;
+                        if (ref_fifo.size() < DEPTH) begin
+                            ref_fifo.push_back(ref_aux);
+                            tr_chk.dato = transaccion_esperada.dato;
+                        end
+                        else begin
+                            tr_chk.dato = '0;
+                        end
 
                        end
                    
@@ -432,8 +458,8 @@ endclass
 
                            if (ref_fifo.size() > 0) begin
 
-                               ref_aux = ref_fifo.pop_front();
-                               tr_chk.dato = ref_aux.dato;
+                                ref_aux = ref_fifo.pop_front();
+                                tr_chk.dato = ref_aux.dato;
 
                            end
 
@@ -636,6 +662,44 @@ endclass
                         end
                     end
 
+                    overflow_dirigido: begin
+
+                        for (int i = 0; i < DEPTH + 2; i++) begin
+
+                            transaccion = new();
+                            transaccion.tipo = escritura;
+
+                            assert(transaccion.randomize() with {
+
+                                tipo == escritura;
+                                retardo >= 0;
+                                retardo <= max_retardo;
+                            })
+                            else $display("[%0t] ERROR: no se pudo randomizar overflow_dirigido", $time);
+
+                            transaccion.tiempo = $time;
+                            generar_y_enviar(transaccion);
+
+                        end
+
+                    end
+
+                    underflow_dirigido: begin
+
+                        for (int i = 0; i < DEPTH + 2; i++) begin
+
+                            transaccion = new();
+                            transaccion.tipo = lectura;
+                            transaccion.retardo = 0;
+                            transaccion.tiempo = $time;
+                            transaccion.dato = '0;
+
+                            generar_y_enviar(transaccion);
+
+                        end
+
+                    end
+
                     default: begin
 
                         $display("[%0t] Agent ERROR: instruccion no valida", $time);
@@ -734,7 +798,7 @@ endclass
            max_retardo = 10;
 
            // Cambia modo según prueba a correr
-           modo_prueba = "BASE";
+           modo_prueba = "UNDERFLOW";
 
            amb = new(vif);
 
@@ -743,110 +807,117 @@ endclass
 
        endfunction
 
-       task run();
+           task run();
 
-           $display("[%0t] Test inicializado", $time);
-           $display("[%0t] Modo de prueba = %0s", $time, modo_prueba);
+                $display("[%0t] Test inicializado", $time);
+                $display("[%0t] Modo de prueba = %0s", $time, modo_prueba);
+                
+                fork
+                    amb.run();
+                join_none
 
-           fork
-               amb.run();
-           join_none
+                wait (vif.rst == 0);
 
-           #10;
+                repeat (1) begin
+                    @(posedge vif.clk);
+                end
+            
+                case (modo_prueba)
+                
+                    "BASE": begin
 
-           case (modo_prueba)
+                        instr_agent = llenado_aleatorio;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-               "BASE": begin
+                        $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
+                    
+                        repeat (5) begin
+                            @(posedge vif.clk);
+                        end
+                    
+                        instr_agent = trans_aleatoria;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   instr_agent = llenado_aleatorio;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
+                        $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
+                    
+                        repeat (5) begin
+                            @(posedge vif.clk);
+                        end
+                    
+                        instr_agent = trans_especifica;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   #50;
+                        $display("[%0t] Test: envia instruccion trans_especifica", $time);
+                    
+                        repeat (5) begin
+                            @(posedge vif.clk);
+                        end
+                    
+                        instr_agent = sec_trans_aleatorias;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   instr_agent = trans_aleatoria;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
+                        $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
+                    end
+                
+                    "OVERFLOW": begin
+                        instr_agent = overflow_dirigido;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   #50;
+                        $display("[%0t] Test: ejecuta overflow_dirigido", $time);
+                    end
+                
+                    "UNDERFLOW": begin
+                        instr_agent = underflow_dirigido;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   instr_agent = trans_especifica;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: envia instruccion trans_especifica", $time);
+                        $display("[%0t] Test: ejecuta underflow_dirigido", $time);
+                    end
+                
+                    "RESET": begin
+                        instr_agent = llenado_aleatorio;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   #50;
+                        $display("[%0t] Test: llena parcialmente la FIFO", $time);
+                    
+                        repeat (5) begin
+                            @(posedge vif.clk);
+                        end
+                    
+                        instr_agent = sec_trans_aleatorias;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-                   instr_agent = sec_trans_aleatorias;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
-               end
+                        $display("[%0t] Test: mezcla operaciones con posibilidad de reset", $time);
+                    end
+                
+                    "SIMULTANEO": begin
+                        instr_agent = sec_trans_aleatorias;
+                        amb.tst_agnt_mbx.put(instr_agent);
 
-               "OVERFLOW": begin
+                        $display("[%0t] Test: secuencia con lectura/escritura simultanea posible", $time);
+                    end
+                
+                    default: begin
 
-                   instr_agent = llenado_aleatorio;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: llena la FIFO", $time);
+                        $display("[%0t] Test ERROR: modo de prueba no valido", $time);
 
-                   #50;
+                    end
+                
+                endcase
+            
+                repeat (20) begin
+                    @(posedge vif.clk);
+                end
+            
+                instr_sb = reporte;
+                amb.tst_sb_mbx.put(instr_sb);
 
-                   instr_agent = trans_especifica;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: intenta una escritura extra", $time);
+                $display("[%0t] Test: solicita reporte al scoreboard", $time);
+            
+                repeat (5) begin
+                    @(posedge vif.clk);
+                end
 
-               end
-
-               "UNDERFLOW": begin
-
-                   instr_agent = trans_aleatoria;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: intenta transaccion aleatoria en FIFO vacia", $time);
-
-                   #50;
-
-                   instr_agent = sec_trans_aleatorias;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: secuencia sobre FIFO inicialmente vacia", $time);
-
-               end
-
-               "RESET": begin
-
-                   instr_agent = llenado_aleatorio;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: llena parcialmente la FIFO", $time);
-
-                   #50;
-
-                   instr_agent = sec_trans_aleatorias;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: mezcla operaciones con posibilidad de reset", $time);
-
-               end
-
-               "SIMULTANEO": begin
-
-                   instr_agent = sec_trans_aleatorias;
-                   amb.tst_agnt_mbx.put(instr_agent);
-                   $display("[%0t] Test: secuencia con lectura/escritura simultanea posible", $time);
-
-               end
-
-               default: begin
-
-                   $display("[%0t] Test ERROR: modo de prueba no valido", $time);
-
-               end
-
-           endcase
-
-           #200;
-
-           instr_sb = reporte;
-           amb.tst_sb_mbx.put(instr_sb);
-           $display("[%0t] Test: solicita reporte al scoreboard", $time);
-
-           #50;
-       endtask
+            endtask
 
     endclass
 

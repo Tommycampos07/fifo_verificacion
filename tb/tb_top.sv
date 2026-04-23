@@ -33,11 +33,17 @@ module tb_top;
     end
 
     initial begin
+        
+    fifo_vif.rst  = 1;
+    fifo_vif.push = 0;
+    fifo_vif.pop  = 0;
+    fifo_vif.din  = '0;
 
-        fifo_vif.rst  = 0;
-        fifo_vif.push = 0;
-        fifo_vif.pop  = 0;
-        fifo_vif.din  = '0;
+    repeat (2) begin
+        @(posedge fifo_vif.clk);
+    end
+
+    fifo_vif.rst = 0;
 
     end
 
