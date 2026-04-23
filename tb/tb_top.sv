@@ -1,6 +1,8 @@
 `timescale 1ns/1ps
 
-import fifo_p::*;
+`include "fifo.sv"
+`include "fifo_p.sv"
+`include "fifo_if.sv"
 
 module tb_top;
 

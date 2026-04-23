@@ -1,0 +1,40 @@
+Command: vcs -Mupdate tb_top.sv -o salida -full64 -sverilog -kdb -lca -debug_acc+all \
+-debug_region+cell+encrypt -l log_test +lint=TFIPC-L -cm line+tgl+cond+fsm+branch+assert \
+
+                         Chronologic VCS (TM)
+       Version R-2020.12-SP2_Full64 -- Thu Apr 23 16:08:06 2026
+
+                    Copyright (c) 1991 - 2021 Synopsys, Inc.
+   This software and the associated documentation are proprietary to Synopsys,
+ Inc. This software may only be used in accordance with the terms and conditions
+ of a written license agreement with Synopsys, Inc. All other use, reproduction,
+            or distribution of this software is strictly prohibited.
+
+
+Warning-[LCA_FEATURES_ENABLED] Usage warning
+  LCA features enabled by '-lca' argument on the command line.  For more 
+  information regarding list of LCA features please refer to Chapter "LCA 
+  features" in the VCS Release Notes
+
+Parsing design file 'tb_top.sv'
+Parsing included file 'fifo.sv'.
+Back to file 'tb_top.sv'.
+Parsing included file 'fifo_p.sv'.
+Back to file 'tb_top.sv'.
+Parsing included file 'fifo_if.sv'.
+Back to file 'tb_top.sv'.
+
+Error-[SE] Syntax error
+  Following verilog source has syntax error :
+  	Token 'test' not recognized as a type. Please check whether it is 
+  misspelled, not visible/valid in the current context, or not properly 
+  imported/exported. This is occurring in a context where either a module 
+  instantiation or a port/variable declaration is expected. This is either 
+  invalid instantiation syntax, or the type has to be known.
+  "tb_top.sv", 27: token is ';'
+      test #(WIDTH, DEPTH) tst;
+                               ^
+
+1 warning
+1 error
+CPU time: .459 seconds to compile

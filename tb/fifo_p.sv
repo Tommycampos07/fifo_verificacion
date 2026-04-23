@@ -867,7 +867,10 @@ endclass
                 repeat (1) begin
                     @(posedge vif.clk);
                 end
-            
+            	if (!$value$plusargs("MODO=%d", modo_prueba)) begin
+			modo_prueba = 0;
+		end
+
                 case (modo_prueba)
                 
                     "BASE": begin
