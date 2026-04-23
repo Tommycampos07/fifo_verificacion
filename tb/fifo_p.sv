@@ -157,49 +157,104 @@ package fifo_p;
 
     class monitor #(parameter int WIDTH = 8);
 
-        virtual fifo_if #(WIDTH) vif;
-        mon_chkr_mbx_t mon_chkr_mbx;
+    virtual fifo_if #(WIDTH) vif;
+    mon_chkr_mbx_t mon_chkr_mbx;
 
-        function new(virtual fifo_if #(WIDTH) vif, mon_chkr_mbx_t mon_chkr_mbx);
-            this.vif = vif;
-            this.mon_chkr_mbx = mon_chkr_mbx;
-        endfunction
+    trans_fifo #(WIDTH) obs_fifo[$];
+    trans_fifo #(WIDTH) aux;
 
-        task run();
-            trans_fifo #(WIDTH) tr_mon;
+    function new(virtual fifo_if #(WIDTH) vif, mon_chkr_mbx_t mon_chkr_mbx);
+        this.vif = vif;
+        this.mon_chkr_mbx = mon_chkr_mbx;
+    endfunction
 
-            forever begin
-                @(posedge vif.clk);
+    task run();
+        trans_fifo #(WIDTH) tr_mon;
 
-                if (vif.rst || vif.push || vif.pop) begin
+        forever begin
+            @(negedge vif.clk);
 
-                    tr_mon = new();
-                    tr_mon.clean();
-                    tr_mon.tiempo = $time;
+            if (vif.rst) begin
+                obs_fifo.delete();
 
-                    if (vif.rst) begin
-                        tr_mon.tipo = reset;
-                    end
-                    else if (vif.push && vif.pop) begin
-                        tr_mon.tipo = lectura_escritura;
-                        tr_mon.dato = vif.din;
-                    end
-                    else if (vif.push) begin
-                        tr_mon.tipo = escritura;
-                        tr_mon.dato = vif.din;
-                    end
-                    else if (vif.pop) begin
-                        tr_mon.tipo = lectura;
-                        tr_mon.dato = vif.dout;
-                    end
-                
-                    mon_chkr_mbx.put(tr_mon);
-                    tr_mon.print("Monitor envia");
-                end
+                tr_mon = new();
+                tr_mon.clean();
+                tr_mon.tiempo = $time;
+                tr_mon.tipo   = reset;
+                tr_mon.dato   = '0;
+
+                mon_chkr_mbx.put(tr_mon);
+                tr_mon.print("Monitor envia");
             end
-        endtask
 
-    endclass
+            else if (vif.push && !vif.pop) begin
+                // Observa escritura
+                aux = new();
+                aux.clean();
+                aux.tiempo = $time;
+                aux.tipo   = escritura;
+                aux.dato   = vif.din;
+                obs_fifo.push_back(aux);
+
+                tr_mon = new();
+                tr_mon.clean();
+                tr_mon.tiempo = $time;
+                tr_mon.tipo   = escritura;
+                tr_mon.dato   = vif.din;
+
+                mon_chkr_mbx.put(tr_mon);
+                tr_mon.print("Monitor envia");
+            end
+
+            else if (!vif.push && vif.pop) begin
+                // Observa lectura
+                tr_mon = new();
+                tr_mon.clean();
+                tr_mon.tiempo = $time;
+                tr_mon.tipo   = lectura;
+
+                if (obs_fifo.size() > 0) begin
+                    aux = obs_fifo.pop_front();
+                    tr_mon.dato = aux.dato;
+                end
+                else begin
+                    tr_mon.dato = '0;
+                end
+
+                mon_chkr_mbx.put(tr_mon);
+                tr_mon.print("Monitor envia");
+            end
+
+            else if (vif.push && vif.pop) begin
+                // Observa lectura/escritura simultánea
+                tr_mon = new();
+                tr_mon.clean();
+                tr_mon.tiempo = $time;
+                tr_mon.tipo   = lectura_escritura;
+
+                if (obs_fifo.size() > 0) begin
+                    aux = obs_fifo.pop_front();
+                    tr_mon.dato = aux.dato;
+                end
+                else begin
+                    tr_mon.dato = '0;
+                end
+
+                // Luego entra el nuevo dato al final
+                aux = new();
+                aux.clean();
+                aux.tiempo = $time;
+                aux.tipo   = escritura;
+                aux.dato   = vif.din;
+                obs_fifo.push_back(aux);
+
+                mon_chkr_mbx.put(tr_mon);
+                tr_mon.print("Monitor envia");
+            end
+        end
+    endtask
+
+endclass
 
     class fifo_checker #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
@@ -323,6 +378,9 @@ package fifo_p;
         trans_fifo #(WIDTH) transaccion_esperada;
         trans_fifo #(WIDTH) tr_chk;
 
+        trans_fifo #(WIDTH) ref_fifo[$];
+        trans_fifo #(WIDTH) ref_aux;
+
         agt_sb_mbx_t agt_sb_mbx;
         sb_chkr_mbx_t sb_chkr_mbx;
         comando_test_sb_mbx test_sb_mbx;
@@ -345,19 +403,91 @@ package fifo_p;
 
             fork
                 forever begin
-                    agt_sb_mbx.get(transaccion_esperada);
 
-                    tr_chk = new();
-                    tr_chk.dato        = transaccion_esperada.dato;
-                    tr_chk.retardo     = transaccion_esperada.retardo;
-                    tr_chk.tiempo      = transaccion_esperada.tiempo;
-                    tr_chk.tipo        = transaccion_esperada.tipo;
-                    tr_chk.max_retardo = transaccion_esperada.max_retardo;
+                   agt_sb_mbx.get(transaccion_esperada);
 
-                    transacciones_esperadas++;
-                    sb_chkr_mbx.put(tr_chk);
+                   tr_chk = new();
+                   tr_chk.clean();
+                   tr_chk.tipo   = transaccion_esperada.tipo;
+                   tr_chk.tiempo = transaccion_esperada.tiempo;
 
-                    tr_chk.print("Scoreboard envia esperado");
+                   case (transaccion_esperada.tipo)
+
+                       escritura: begin
+
+                           ref_aux = new();
+                           ref_aux.dato        = transaccion_esperada.dato;
+                           ref_aux.retardo     = transaccion_esperada.retardo;
+                           ref_aux.tiempo      = transaccion_esperada.tiempo;
+                           ref_aux.tipo        = transaccion_esperada.tipo;
+                           ref_aux.max_retardo = transaccion_esperada.max_retardo;
+
+                           ref_fifo.push_back(ref_aux);
+
+                           tr_chk.dato = transaccion_esperada.dato;
+
+                       end
+                   
+                       lectura: begin
+
+                           if (ref_fifo.size() > 0) begin
+
+                               ref_aux = ref_fifo.pop_front();
+                               tr_chk.dato = ref_aux.dato;
+
+                           end
+
+                           else begin
+
+                               tr_chk.dato = '0;
+
+                           end
+
+                       end
+                   
+                       reset: begin
+
+                           ref_fifo.delete();
+                           tr_chk.dato = '0;
+
+                       end
+                   
+                       lectura_escritura: begin
+
+                           if (ref_fifo.size() > 0) begin
+
+                               ref_aux = ref_fifo.pop_front();
+                               tr_chk.dato = ref_aux.dato;
+
+                           end
+
+                           else begin
+
+                               tr_chk.dato = '0;
+
+                           end
+                       
+                           ref_aux = new();
+                           ref_aux.dato        = transaccion_esperada.dato;
+                           ref_aux.retardo     = transaccion_esperada.retardo;
+                           ref_aux.tiempo      = transaccion_esperada.tiempo;
+                           ref_aux.tipo        = escritura;
+                           ref_aux.max_retardo = transaccion_esperada.max_retardo;
+                       
+                           ref_fifo.push_back(ref_aux);
+                       end
+                   
+                       default: begin
+
+                           tr_chk.dato = transaccion_esperada.dato;
+                       end
+
+                   endcase
+               
+                   transacciones_esperadas++;
+                   sb_chkr_mbx.put(tr_chk);
+                   tr_chk.print("Scoreboard envia esperado");
+
                 end
 
                 forever begin

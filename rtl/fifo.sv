@@ -18,48 +18,56 @@ module fifo #(
     logic [ADDR_W-1:0] rd_ptr;
     logic [ADDR_W:0]   count;
 
+    assign pndng = (count != 0);
+    assign full  = (count == DEPTH);
+
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
             wr_ptr <= '0;
             rd_ptr <= '0;
             count  <= '0;
+            dout   <= '0;
         end
         else begin
             case ({push, pop})
 
                 2'b10: begin
-                    // Solo push
                     if (!full) begin
                         mem[wr_ptr] <= din;
                         wr_ptr <= (wr_ptr == DEPTH-1) ? '0 : wr_ptr + 1;
                         count  <= count + 1;
+
+                        if (!pndng)
+                            dout <= din;
                     end
                 end
 
                 2'b01: begin
-                    // Solo pop
                     if (pndng) begin
+                        dout <= mem[rd_ptr];
                         rd_ptr <= (rd_ptr == DEPTH-1) ? '0 : rd_ptr + 1;
                         count  <= count - 1;
+                    end
+                    else begin
+                        dout <= '0;
                     end
                 end
 
                 2'b11: begin
-                    // Push y pop simultáneos
                     if (pndng && !full) begin
-                        // Sale uno y entra uno: count no cambia
+                        dout <= mem[rd_ptr];
                         mem[wr_ptr] <= din;
                         wr_ptr <= (wr_ptr == DEPTH-1) ? '0 : wr_ptr + 1;
                         rd_ptr <= (rd_ptr == DEPTH-1) ? '0 : rd_ptr + 1;
                     end
                     else if (!pndng) begin
-                        // Vacía: el push sí mete dato, pop no saca nada útil
                         mem[wr_ptr] <= din;
                         wr_ptr <= (wr_ptr == DEPTH-1) ? '0 : wr_ptr + 1;
                         count  <= count + 1;
+                        dout   <= din;
                     end
                     else if (full) begin
-                        // Llena: sale uno y entra uno, count no cambia
+                        dout <= mem[rd_ptr];
                         mem[wr_ptr] <= din;
                         wr_ptr <= (wr_ptr == DEPTH-1) ? '0 : wr_ptr + 1;
                         rd_ptr <= (rd_ptr == DEPTH-1) ? '0 : rd_ptr + 1;
@@ -67,21 +75,8 @@ module fifo #(
                 end
 
                 default: begin
-                    // 2'b00: no hacer nada
                 end
             endcase
-        end
-    end
-
-    always_comb begin
-        pndng = (count != 0);
-        full  = (count == DEPTH);
-
-        if (pndng) begin
-            dout = mem[rd_ptr];
-        end
-        else begin
-            dout = '0;
         end
     end
 
