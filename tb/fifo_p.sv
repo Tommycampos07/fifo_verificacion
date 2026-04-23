@@ -715,69 +715,138 @@ endclass
 
     class test #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
-    ambiente #(WIDTH, DEPTH) amb;
-    virtual fifo_if #(WIDTH) vif;
+       ambiente #(WIDTH, DEPTH) amb;
+       virtual fifo_if #(WIDTH) vif;
 
-    int num_transacciones;
-    int max_retardo;
+       int num_transacciones;
+       int max_retardo;
 
-    instrucciones_agente instr_agent;
-    solicitud_sb instr_sb;
+       string modo_prueba;
 
-    function new(virtual fifo_if #(WIDTH) vif);
+       instrucciones_agente instr_agent;
+       solicitud_sb instr_sb;
 
-        this.vif = vif;
+       function new(virtual fifo_if #(WIDTH) vif);
 
-        num_transacciones = 10;
-        max_retardo = 10;
+           this.vif = vif;
 
-        amb = new(vif);
+           num_transacciones = 10;
+           max_retardo = 10;
 
-        amb.agt.num_transacciones = num_transacciones;
-        amb.agt.max_retardo = max_retardo;
+           // Cambia modo según prueba a correr
+           modo_prueba = "BASE";
 
-    endfunction
+           amb = new(vif);
 
-    task run();
-        $display("[%0t] Test inicializado", $time);
+           amb.agt.num_transacciones = num_transacciones;
+           amb.agt.max_retardo = max_retardo;
 
-        fork
-            amb.run();
-        join_none
+       endfunction
 
-        #10;
+       task run();
 
-        instr_agent = llenado_aleatorio;
-        amb.tst_agnt_mbx.put(instr_agent);
-        $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
+           $display("[%0t] Test inicializado", $time);
+           $display("[%0t] Modo de prueba = %0s", $time, modo_prueba);
 
-        #50;
+           fork
+               amb.run();
+           join_none
 
-        instr_agent = trans_aleatoria;
-        amb.tst_agnt_mbx.put(instr_agent);
-        $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
+           #10;
 
-        #50;
+           case (modo_prueba)
 
-        instr_agent = trans_especifica;
-        amb.tst_agnt_mbx.put(instr_agent);
-        $display("[%0t] Test: envia instruccion trans_especifica", $time);
+               "BASE": begin
 
-        #50;
+                   instr_agent = llenado_aleatorio;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
 
-        instr_agent = sec_trans_aleatorias;
-        amb.tst_agnt_mbx.put(instr_agent);
-        $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
-        
-        #200
+                   #50;
 
-        instr_sb = reporte;
-        amb.tst_sb_mbx.put(instr_sb);
-        $display("[%0t] Test: solicita reporte al scoreboard", $time);
+                   instr_agent = trans_aleatoria;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
 
-        #50;
+                   #50;
 
-    endtask
+                   instr_agent = trans_especifica;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: envia instruccion trans_especifica", $time);
+
+                   #50;
+
+                   instr_agent = sec_trans_aleatorias;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
+               end
+
+               "OVERFLOW": begin
+
+                   instr_agent = llenado_aleatorio;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: llena la FIFO", $time);
+
+                   #50;
+
+                   instr_agent = trans_especifica;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: intenta una escritura extra", $time);
+
+               end
+
+               "UNDERFLOW": begin
+
+                   instr_agent = trans_aleatoria;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: intenta transaccion aleatoria en FIFO vacia", $time);
+
+                   #50;
+
+                   instr_agent = sec_trans_aleatorias;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: secuencia sobre FIFO inicialmente vacia", $time);
+
+               end
+
+               "RESET": begin
+
+                   instr_agent = llenado_aleatorio;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: llena parcialmente la FIFO", $time);
+
+                   #50;
+
+                   instr_agent = sec_trans_aleatorias;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: mezcla operaciones con posibilidad de reset", $time);
+
+               end
+
+               "SIMULTANEO": begin
+
+                   instr_agent = sec_trans_aleatorias;
+                   amb.tst_agnt_mbx.put(instr_agent);
+                   $display("[%0t] Test: secuencia con lectura/escritura simultanea posible", $time);
+
+               end
+
+               default: begin
+
+                   $display("[%0t] Test ERROR: modo de prueba no valido", $time);
+
+               end
+
+           endcase
+
+           #200;
+
+           instr_sb = reporte;
+           amb.tst_sb_mbx.put(instr_sb);
+           $display("[%0t] Test: solicita reporte al scoreboard", $time);
+
+           #50;
+       endtask
 
     endclass
 
