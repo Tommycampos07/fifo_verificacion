@@ -82,7 +82,13 @@ package fifo_p;
         sec_trans_aleatorias, 
         overflow_dirigido, 
         underflow_dirigido, 
-        reset_dirigido
+        reset_dirigido,
+        patron_bits,
+        simultaneo_bajo,
+        simultaneo_medio,
+        simultaneo_alto,
+        reset_llena,
+        reset_vacia
     } instrucciones_agente;
 
     typedef mailbox #(trans_fifo) trans_fifo_mbx;
@@ -500,7 +506,7 @@ endclass
                                tr_chk.dato = '0;
 
                            end
-                       
+                           if (ref_fifo.size() < DEPTH) begin
                            ref_aux = new();
                            ref_aux.dato        = transaccion_esperada.dato;
                            ref_aux.retardo     = transaccion_esperada.retardo;
@@ -744,7 +750,188 @@ endclass
                         generar_y_enviar(transaccion);
 
                     end
-                        
+
+                    patron_bits: begin
+
+                        begin
+
+                            automatic bit [WIDTH-1:0] patrones[4] = '{
+                            
+                                8'h00,   // 0000_0000 — todo ceros                            
+                                8'h55,   // 0101_0101 — alternancia baja                           
+                                8'hAA,   // 1010_1010 — alternancia alta
+                                8'hFF    // 1111_1111 — todo unos
+                            
+                            };
+                            
+                            for (int i = 0; i < DEPTH; i++) begin
+
+                                transaccion = new();
+                                transaccion.tipo    = escritura;
+                                transaccion.dato    = patrones[i % 4];
+                                transaccion.retardo = 0;   // back-to-back para mayor estrés
+                                transaccion.tiempo  = $time;
+                                generar_y_enviar(transaccion);
+
+                            end
+
+                            for (int i = 0; i < DEPTH; i++) begin
+                                transaccion = new();
+                                transaccion.tipo    = lectura;
+                                transaccion.retardo = 0;
+                                transaccion.tiempo  = $time;
+                                transaccion.dato    = '0;
+                                generar_y_enviar(transaccion);
+                            end
+                        end
+                    end
+
+                    simultaneo_bajo: begin
+                    // Llena hasta DEPTH/4 (nivel bajo ~25%)
+                        begin
+
+                            automatic int nivel = DEPTH / 4;                
+
+                            for (int i = 0; i < nivel; i++) begin
+
+                                transaccion = new();
+                                transaccion.tipo = escritura;
+
+                                assert(transaccion.randomize() with {
+                                    tipo == escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_bajo", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+
+                            end             
+
+                            // Ahora hace push+pop simultáneos
+                            for (int i = 0; i < num_transacciones; i++) begin
+
+                                transaccion = new();
+
+                                assert(transaccion.randomize() with {
+                                    tipo == lectura_escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_bajo lw", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+                            end
+                        end
+                    end             
+
+                    simultaneo_medio: begin
+                        // Llena hasta DEPTH/2 (nivel medio ~50%)
+                        begin
+                            automatic int nivel = DEPTH / 2;                
+
+                            for (int i = 0; i < nivel; i++) begin
+                                transaccion = new();
+                                transaccion.tipo = escritura;
+                                assert(transaccion.randomize() with {
+                                    tipo == escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_medio", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+                            end             
+
+                            for (int i = 0; i < num_transacciones; i++) begin
+                                transaccion = new();
+                                assert(transaccion.randomize() with {
+                                    tipo == lectura_escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_medio lw", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+                            end
+                        end
+                    end             
+
+                    simultaneo_alto: begin
+                        // Llena hasta DEPTH-2 (nivel alto, casi llena)
+                        begin
+                            automatic int nivel = DEPTH - 2;                
+
+                            for (int i = 0; i < nivel; i++) begin
+                                transaccion = new();
+                                transaccion.tipo = escritura;
+                                assert(transaccion.randomize() with {
+                                    tipo == escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_alto", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+                            end             
+
+                            for (int i = 0; i < num_transacciones; i++) begin
+
+                                transaccion = new();
+                                assert(transaccion.randomize() with {
+                                    tipo == lectura_escritura;
+                                    retardo >= 0;
+                                    retardo <= max_retardo;
+                                }) else $display("[%0t] ERROR randomize simultaneo_alto lw", $time);
+                                transaccion.tiempo = $time;
+                                generar_y_enviar(transaccion);
+                            end
+                        end
+                    end
+
+                    reset_llena: begin
+                        // Llena la FIFO completamente, luego aplica reset
+                        for (int i = 0; i < DEPTH; i++) begin
+                            transaccion = new();
+                            transaccion.tipo = escritura;
+                            assert(transaccion.randomize() with {
+                                tipo == escritura;
+                                retardo >= 0;
+                                retardo <= max_retardo;
+                            }) else $display("[%0t] ERROR randomize reset_llena", $time);
+                            transaccion.tiempo = $time;
+                            generar_y_enviar(transaccion);
+                        end
+                    
+                        // Reset con FIFO llena (full=1)
+                        transaccion = new();
+                        transaccion.tipo    = reset;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo  = $time;
+                        transaccion.dato    = '0;
+                        generar_y_enviar(transaccion);
+                    
+                        // Intenta leer después del reset — debe dar underflow
+                        transaccion = new();
+                        transaccion.tipo    = lectura;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo  = $time;
+                        transaccion.dato    = '0;
+                        generar_y_enviar(transaccion);
+                    end
+
+                    reset_vacia: begin
+                        // Reset directo sin haber escrito nada (FIFO vacía, pndng=0)
+                        transaccion = new();
+                        transaccion.tipo    = reset;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo  = $time;
+                        transaccion.dato    = '0;
+                        generar_y_enviar(transaccion);
+                    
+                        // Intenta leer — debe dar underflow
+                        transaccion = new();
+                        transaccion.tipo    = lectura;
+                        transaccion.retardo = 0;
+                        transaccion.tiempo  = $time;
+                        transaccion.dato    = '0;
+                        generar_y_enviar(transaccion);
+                    end
 
                     default: begin
 
@@ -825,141 +1012,191 @@ endclass
 
     class test #(parameter int WIDTH = 8, parameter int DEPTH = 8);
 
-       ambiente #(WIDTH, DEPTH) amb;
-       virtual fifo_if #(WIDTH) vif;
+    ambiente #(WIDTH, DEPTH) amb;
+    virtual fifo_if #(WIDTH) vif;
 
-       int num_transacciones;
-       int max_retardo;
+    // Parámetros configurables por plusarg
+    int  num_transacciones;
+    int  max_retardo;
+    int  min_retardo;       // NUEVO — para back-to-back con +MIN_RETARDO=0
+    int  seed;              // NUEVO — para reproducibilidad con +SEED=1234
+    string modo_prueba;
 
-       string modo_prueba;
+    instrucciones_agente instr_agent;
+    solicitud_sb         instr_sb;
 
-       instrucciones_agente instr_agent;
-       solicitud_sb instr_sb;
+    function new(virtual fifo_if #(WIDTH) vif);
+        int tmp;
 
-       function new(virtual fifo_if #(WIDTH) vif);
+        this.vif = vif;
 
-           this.vif = vif;
+        // ── Valores por defecto ──────────────────────────────────────
+        num_transacciones = 10;
+        max_retardo       = 10;
+        min_retardo       = 0;
+        seed              = 0;
+        modo_prueba       = "SIMULTANEO";
 
-           num_transacciones = 10;
-           max_retardo = 10;
+        // ── Lectura de plusargs ANTES de crear el ambiente ───────────
+        // Cada if lee el plusarg; si no existe, conserva el default
+        if ($value$plusargs("MODO=%s",        modo_prueba))    ;
+        if ($value$plusargs("NUM_TRANS=%d",   tmp)) num_transacciones = tmp;
+        if ($value$plusargs("MAX_RETARDO=%d", tmp)) max_retardo       = tmp;
+        if ($value$plusargs("MIN_RETARDO=%d", tmp)) min_retardo       = tmp;
+        if ($value$plusargs("SEED=%d",        tmp)) seed              = tmp;
 
-           // Cambia modo según prueba a correr
-           modo_prueba = "SIMULTANEO";
+        // ── Validaciones básicas ─────────────────────────────────────
+        if (min_retardo > max_retardo) begin
+            $display("[TEST] ADVERTENCIA: MIN_RETARDO > MAX_RETARDO, corrigiendo.");
+            min_retardo = 0;
+        end
 
-           amb = new(vif);
+        if (num_transacciones <= 0) begin
+            $display("[TEST] ADVERTENCIA: NUM_TRANS invalido, usando 10.");
+            num_transacciones = 10;
+        end
 
-           amb.agt.num_transacciones = num_transacciones;
-           amb.agt.max_retardo = max_retardo;
+        // ── Semilla para reproducibilidad ────────────────────────────
+        // seed=0 significa "no fijar semilla" (aleatorio cada corrida)
+        if (seed != 0)
+            process::self().srandom(seed);
 
-       endfunction
+        // ── Crear ambiente y propagar configuración ──────────────────
+        amb = new(vif);
+        amb.agt.num_transacciones = num_transacciones;
+        amb.agt.max_retardo       = max_retardo;
+        amb.agt.min_retardo       = min_retardo;  // se agrega al agent
 
-           task run();
+        // ── Log de configuración ─────────────────────────────────────
+        $display("╔══════════════════════════════════════╗");
+        $display("║        CONFIGURACION DEL TEST        ║");
+        $display("╠══════════════════════════════════════╣");
+        $display("║  MODO          = %0s", modo_prueba);
+        $display("║  NUM_TRANS     = %0d", num_transacciones);
+        $display("║  MAX_RETARDO   = %0d", max_retardo);
+        $display("║  MIN_RETARDO   = %0d", min_retardo);
+        $display("║  SEED          = %0s", (seed==0) ? "aleatorio" : $sformatf("%0d", seed));
+        $display("╚══════════════════════════════════════╝");
 
-                $display("[%0t] Test inicializado", $time);
-                $display("[%0t] Modo de prueba = %0s", $time, modo_prueba);
-                
-                fork
-                    amb.run();
-                join_none
+    endfunction
 
-                wait (vif.rst == 0);
+    task run();
 
-                repeat (1) begin
-                    @(posedge vif.clk);
-                end
-            	if (!$value$plusargs("MODO=%d", modo_prueba)) begin
-			modo_prueba = 0;
-		end
+        $display("[%0t] Test iniciado — modo: %0s", $time, modo_prueba);
 
-                case (modo_prueba)
-                
-                    "BASE": begin
+        fork
+            amb.run();
+        join_none
 
-                        instr_agent = llenado_aleatorio;
-                        amb.tst_agnt_mbx.put(instr_agent);
+        // Espera a que el reset inicial del tb_top termine
+        wait (vif.rst == 0);
+        repeat (2) @(posedge vif.clk);
 
-                        $display("[%0t] Test: envia instruccion llenado_aleatorio", $time);
-                    
-                        repeat (5) begin
-                            @(posedge vif.clk);
-                        end
-                    
-                        instr_agent = trans_aleatoria;
-                        amb.tst_agnt_mbx.put(instr_agent);
+        // ── Despacho según modo ──────────────────────────────────────
+        case (modo_prueba)
 
-                        $display("[%0t] Test: envia instruccion trans_aleatoria", $time);
-                    
-                        repeat (5) begin
-                            @(posedge vif.clk);
-                        end
-                    
-                        instr_agent = trans_especifica;
-                        amb.tst_agnt_mbx.put(instr_agent);
+            "BASE": begin
+                instr_agent = llenado_aleatorio;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: llenado_aleatorio", $time);
 
-                        $display("[%0t] Test: envia instruccion trans_especifica", $time);
-                    
-                        repeat (5) begin
-                            @(posedge vif.clk);
-                        end
-                    
-                        instr_agent = sec_trans_aleatorias;
-                        amb.tst_agnt_mbx.put(instr_agent);
+                instr_agent = trans_aleatoria;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: trans_aleatoria", $time);
 
-                        $display("[%0t] Test: envia instruccion sec_trans_aleatorias", $time);
-                    end
-                
-                    "OVERFLOW": begin
-                        instr_agent = overflow_dirigido;
-                        amb.tst_agnt_mbx.put(instr_agent);
+                instr_agent = trans_especifica;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: trans_especifica", $time);
 
-                        $display("[%0t] Test: ejecuta overflow_dirigido", $time);
-                    end
-                
-                    "UNDERFLOW": begin
-                        instr_agent = underflow_dirigido;
-                        amb.tst_agnt_mbx.put(instr_agent);
+                instr_agent = sec_trans_aleatorias;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: sec_trans_aleatorias", $time);
+            end
 
-                        $display("[%0t] Test: ejecuta underflow_dirigido", $time);
-                    end
+            "OVERFLOW": begin
+                instr_agent = overflow_dirigido;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: overflow_dirigido", $time);
+            end
 
-                   "RESET": begin
+            "UNDERFLOW": begin
+                instr_agent = underflow_dirigido;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: underflow_dirigido", $time);
+            end
 
-                        instr_agent = reset_dirigido;
-                        amb.tst_agnt_mbx.put(instr_agent);
+            "RESET": begin
+                instr_agent = reset_dirigido;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: reset_dirigido", $time);
+            end
 
-                        $display("[%0t] Test: ejecuta reset_dirigido", $time);
-                    end
-                
-                    "SIMULTANEO": begin
-                        instr_agent = sec_trans_aleatorias;
-                        amb.tst_agnt_mbx.put(instr_agent);
+            "SIMULTANEO": begin
+                instr_agent = sec_trans_aleatorias;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: sec_trans_aleatorias (simultaneo)", $time);
+            end
 
-                        $display("[%0t] Test: secuencia con lectura/escritura simultanea posible", $time);
-                    end
-                
-                    default: begin
+            // ── Casos de esquina nuevos ──────────────────────────────
+            "PATRON": begin
+                instr_agent = patron_bits;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: patron_bits", $time);
+            end
 
-                        $display("[%0t] Test ERROR: modo de prueba no valido", $time);
+            "SIM_BAJO": begin
+                instr_agent = simultaneo_bajo;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: simultaneo_bajo", $time);
+            end
 
-                    end
-                
-                endcase
-            
-                repeat (20) begin
-                    @(posedge vif.clk);
-                end
-            
-                instr_sb = reporte;
-                amb.tst_sb_mbx.put(instr_sb);
+            "SIM_MEDIO": begin
+                instr_agent = simultaneo_medio;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: simultaneo_medio", $time);
+            end
 
-                $display("[%0t] Test: solicita reporte al scoreboard", $time);
-            
-                repeat (5) begin
-                    @(posedge vif.clk);
-                end
+            "SIM_ALTO": begin
+                instr_agent = simultaneo_alto;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: simultaneo_alto", $time);
+            end
 
-            endtask
+            "RESET_LLENA": begin
+                instr_agent = reset_llena;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: reset_llena", $time);
+            end
 
-    endclass
+            "RESET_VACIA": begin
+                instr_agent = reset_vacia;
+                amb.tst_agnt_mbx.put(instr_agent);
+                $display("[%0t] Test: reset_vacia", $time);
+            end
+
+            default: begin
+                $display("[%0t] Test ERROR: modo '%0s' no reconocido", $time, modo_prueba);
+            end
+
+        endcase
+
+        // ── Tiempo de drenado y reporte final ────────────────────────
+        // Espera suficiente para que todas las transacciones terminen
+        // Fórmula: (num_trans + DEPTH) * (max_retardo + 4) ciclos * 10ns
+        repeat ((num_transacciones + DEPTH) * (max_retardo + 4) + 50) begin
+            @(posedge vif.clk);
+        end
+
+        instr_sb = reporte;
+        amb.tst_sb_mbx.put(instr_sb);
+        $display("[%0t] Test: reporte solicitado al scoreboard", $time);
+
+        repeat (10) @(posedge vif.clk);
+        $display("[%0t] Test: fin", $time);
+        $finish;
+
+    endtask
+
+endclass
 
 endpackage

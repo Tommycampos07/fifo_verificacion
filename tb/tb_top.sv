@@ -58,7 +58,7 @@ module tb_top;
 
     initial begin
         
-       #1000
+       #500000
         $display("[%0t] Fin de simulacion por timeout", $time);
         $finish;
 
