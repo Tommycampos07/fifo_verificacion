@@ -515,8 +515,8 @@ endclass
                            ref_aux.max_retardo = transaccion_esperada.max_retardo;
                        
                            ref_fifo.push_back(ref_aux);
+                       	   end
                        end
-                   
                        default: begin
 
                            tr_chk.dato = transaccion_esperada.dato;
@@ -578,11 +578,13 @@ endclass
 
         int num_transacciones;
         int max_retardo;
+	int min_retardo;
 
         function new();
 
             num_transacciones = 10;
             max_retardo = 10;
+	    min_retardo = 0;
 
         endfunction
 
